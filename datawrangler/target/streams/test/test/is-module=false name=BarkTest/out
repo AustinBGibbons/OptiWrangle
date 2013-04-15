@@ -1,0 +1,15 @@
+[0m[[0minfo[0m] [0m[32mBarkTest:[0m[0m
+[0m[[0minfo[0m] [0m[32mcollect [0m[0m
+[0m[[0minfo[0m] [0m[31m- should preserve the values *** FAILED ***[0m[0m
+[0m[[0minfo[0m] [0m[31m  java.lang.NullPointerException:[0m[0m
+[0m[[0minfo[0m] [0m[31m  at spark.SparkContext.runJob(SparkContext.scala:578)[0m[0m
+[0m[[0minfo[0m] [0m[31m  at spark.SparkContext.runJob(SparkContext.scala:596)[0m[0m
+[0m[[0minfo[0m] [0m[31m  at spark.SparkContext.runJob(SparkContext.scala:610)[0m[0m
+[0m[[0minfo[0m] [0m[31m  at spark.SparkContext.runJob(SparkContext.scala:624)[0m[0m
+[0m[[0minfo[0m] [0m[31m  at spark.RDD.collect(RDD.scala:389)[0m[0m
+[0m[[0minfo[0m] [0m[31m  at BarkTest$$anonfun$1.apply$mcV$sp(BarkTest.scala:12)[0m[0m
+[0m[[0minfo[0m] [0m[31m  at BarkTest$$anonfun$1.apply(BarkTest.scala:11)[0m[0m
+[0m[[0minfo[0m] [0m[31m  at BarkTest$$anonfun$1.apply(BarkTest.scala:11)[0m[0m
+[0m[[0minfo[0m] [0m[31m  at org.scalatest.FlatSpec$$anon$1.apply(FlatSpec.scala:2977)[0m[0m
+[0m[[0minfo[0m] [0m[31m  at org.scalatest.Suite$class.withFixture(Suite.scala:1974)[0m[0m
+[0m[[0minfo[0m] [0m[31m  ...[0m[0m
