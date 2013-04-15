@@ -2,10 +2,34 @@ package main.scala
 
 import scala.util.matching.Regex
 
+//test
+object DataWrangler {
+  /**
+  * Experimental : apply operations to columns directly
+  */
+  class Column(dw: DataWrangler, index: Int, column: Array[String]) {
+    def cut(f: String => String) {
+      dw.table(index) = column.map(x => {
+        val remove = f(x)
+        x.substring(0, x.indexOf(remove)) + x.substring(x.indexOf(remove) + remove.length)
+      })
+    }
+    def partition(f: String => String) {
+      // one pass to find tables
+      val partition = column.zip(0 until column.size).map(x => (f(x._1), x._2)).unzip
+      // I'll add legibility later todo
+      val newTables = partition._1.toSet.toArray.map(t => new DataWrangler(dw.table.map(col => col.zip(0 until col.size).zip(partition._2).filter(x => x._1._2 == x._2).map(x => x._1._1).toArray), dw.header /*, name*/))
+      // do something with the newTables
+    }
+  }
+  implicit def ASToColumn(column: (DataWrangler, Int, Array[String])) = new Column(column._1, column._2, column._3)
+  //implicit def ColumntToAS(column: Column) = column.column
+}
+
 class DataWrangler(var table: Array[Array[String]], var header: Array[String]) {
   // drop EOF character
-  val bigger = table.drop(1).map(x => table(0).length > x.length).reduce(_ && _)
-  if (bigger || table.length == 1)
+  val bigger = if (table.length == 1) true else table.drop(1).map(x => table(0).length > x.length).reduce(_ && _)
+  if (bigger)
     table(0) = table(0).dropRight(1)
 
   val FAKE_STRING = "L!G0nb**g" + (new scala.util.Random()).nextInt
@@ -63,6 +87,10 @@ class DataWrangler(var table: Array[Array[String]], var header: Array[String]) {
 
   def stretch(arr: Array[String], size: Int) = {
     arr ++ Array.fill[String](size - arr.length)("")
+  }
+
+  def apply(column: Any) = {
+    (this, getColumn(column), table(getColumn(column)))
   }
 
   /**
@@ -178,6 +206,12 @@ class DataWrangler(var table: Array[Array[String]], var header: Array[String]) {
     if(header.toSet.size != header.length) error("trying to create a non-unique header")
     table = table map (col => col.take(row) ++ col.drop(row+1))
   } 
+
+  def promote(arr: Array[String]) {
+    header = arr
+    if(header.toSet.size != header.length) error("trying to create a non-unique header")
+    if(header.size != table.size) error("trying to create a header of size " + header.size + " but table has " + table.size + " columns")
+  }
 
   /**
   * Move the header row into the table
@@ -318,8 +352,13 @@ class DataWrangler(var table: Array[Array[String]], var header: Array[String]) {
     } 
   }
 
+  def wrapInt(width: Int) {
+    if(table(0).length % width != 0) warn("wrapping a table of length : " + table(0).length + " into " + width + " columns")
+    table = table.map{col => col.grouped(width).toArray}.map(x=>x.transpose).flatMap(x => x)
+  }
+
   // todo : direction - currently only down on columns
-  def wrap(row: Any = null, column: Any = null, where: Any = null) {
+  def wrap(where: Any = null, row: Any = null, column: Any = null) {
     if (column != null) {
       table.transpose
       wrap(column, null, where)
@@ -328,6 +367,7 @@ class DataWrangler(var table: Array[Array[String]], var header: Array[String]) {
     val w = where match {
       case x: String => x.r
       case x: Regex => x
+      case x: Int => {wrapInt(x) ; return; "".r}
       case _ => {error("Unrecognized conditional for wrap"); "".r}
     }
     table.transpose
@@ -884,8 +924,8 @@ class DataWrangler(var table: Array[Array[String]], var header: Array[String]) {
   }
 
   // IO
-  def this(inFile: String, rows: String="\n", cols: String=",") = this(
-    scala.io.Source.fromFile(inFile).mkString.split(rows, -1).map(x => x.split(cols, -1)).transpose, null
+  def this(inFile: String, rows: String="\n", cols: String=null) = this(
+    scala.io.Source.fromFile(inFile).mkString.split(rows, -1).map(x => if(cols != null) x.split(cols, -1) else Array(x)).transpose, null
   )
 
   def writeToFile(outFile: String) : Unit = {

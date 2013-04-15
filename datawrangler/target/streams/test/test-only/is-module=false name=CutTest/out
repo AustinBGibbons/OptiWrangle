@@ -1,4 +1,0 @@
-[0m[[0minfo[0m] [0m[32mCutTest:[0m[0m
-[0m[[0minfo[0m] [0m[32mcut [0m[0m
-[0m[[0minfo[0m] [0m[31m- should remove a wide array of values *** FAILED ***[0m[0m
-[0m[[0minfo[0m] [0m[31m  org.scalatest.exceptions.TestFailedException was thrown. (CutTest.scala:39)[0m[0m
