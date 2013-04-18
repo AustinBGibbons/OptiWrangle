@@ -191,7 +191,6 @@ class Column(val column: RDD[String], val header: String, sc: SparkContext) exte
     val arr = column.toArray
     Array(copy(sc.parallelize(arr.take(row) ++ arr.drop(row + 1))))
   }
-
 }
 
 object Table extends Base {
@@ -524,9 +523,27 @@ class SparkWrangler(val tables: Array[Table], val sc: SparkContext, val inDir: S
 
   def transpose() = copy(tables.map(_.transpose))
 
-  // def fold
+  // fold on header
+  def fold() = this
+  def fold(rows: Seq[Int]) = this
+  def fold(f: (String => Boolean)) = this // perhaps not worth offering all columns explicitly. What does that even mean?
+  def fold(f: (String => Boolean), columns: Any) = this
 
   // def unfold  
+  def unfold(column: Any, measure: Any) = this
+
+  @deprecated(message="Translate not supported in OptiWrangle. Email austinbgibbons@gmail", since="0.0")
+  def translateLeft(distance: Int) = this
+  @deprecated(message="Translate not supported in OptiWrangle. Email austinbgibbons@gmail", since="0.0")
+  def translateRight(distance: Int) = this
+  @deprecated(message="Translate not supported in OptiWrangle. Email austinbgibbons@gmail", since="0.0")
+  def translateUp(distance: Int) = this
+  @deprecated(message="Translate not supported in OptiWrangle. Email austinbgibbons@gmail", since="0.0")
+  def translateDown(distance: Int) = this
+
+  // todo - what other types of partitioning? Every n rows, by columns, etc.
+  def partition(f: (String => String)) = this
+  def partition(f: (String => String), columns: Any) = this
 
   //
   // IO
