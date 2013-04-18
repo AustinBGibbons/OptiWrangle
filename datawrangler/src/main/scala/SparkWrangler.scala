@@ -50,6 +50,7 @@ class Base {
 
 object Column extends Base {
   def apply(arr: Array[String], sc: SparkContext) = new Column(sc.parallelize(arr), null, sc)
+  def apply(rdd: RDD[String], sc: SparkContext) = new Column(rdd, null, sc)
 }
 
 // It has become clear to me that we should store the index of the column in the table
@@ -365,6 +366,10 @@ class Table(val table: Array[Column], val name: String = "Table", sc: SparkConte
     table(column) = newColumn
   }
 
+  // currently => throw away header. Is this the thing to do? todo. haha.
+  // todo - column and row formats? other solution?
+  def transpose() = copy(table.map(col => col.collect()).toArray.transpose.map(t => Column(sc.parallelize(t), sc)))
+
   /*
   * IO
   */
@@ -517,7 +522,11 @@ class SparkWrangler(val tables: Array[Table], val sc: SparkContext, val inDir: S
   def wrapRow(f: (String => Boolean)) = this
   def wrapRow(f: (String => Boolean), columns: Any) = this
 
-  
+  def transpose() = copy(tables.map(_.transpose))
+
+  // def fold
+
+  // def unfold  
 
   //
   // IO
