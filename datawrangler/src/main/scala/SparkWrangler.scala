@@ -79,6 +79,13 @@ class Column(val column: RDD[String], val header: String, sc: SparkContext) exte
   }
   def promote(h: String) = copy(_header = h)
 
+  // TODO This could be better
+  def demote(row: Int = 0) = {
+    val left = sc.parallelize(column.take(row)) // todo check row is small
+    val right = column.subtract(left)
+    copy((left ++ sc.parallelize(Array(header))) ++ right, null)
+  }
+
   // cuts just once
   def cut(index: Int) = Array(copy(column.map(cell => {
     if(index < 0) error("Trying to cut on index: " + index)
@@ -220,9 +227,8 @@ class Table(val table: Array[Column], val name: String = "Table", sc: SparkConte
   }
   
   // create a header
-  def promote(row: Int) : Table = {
-    copy(table.map(_.promote(row))) 
-  }
+  def promote(row: Int) = copy(table.map(_.promote(row))) 
+  def demote(row: Int = 0) = copy(table.map(_.demote(row)))
   
   def promote(newHeader: Array[String]) : Table = {
     if(newHeader.size != table.size) 
@@ -424,6 +430,7 @@ class SparkWrangler(val tables: Array[Table], val sc: SparkContext, val inDir: S
   */
   def promote(header: Array[String]) = copy(tables.map(_.promote(header))) 
   def promote(row: Int) = copy(tables.map(_.promote(row))) 
+  def demote(row: Int = 0) = copy(tables.map(_.demote(row))) 
 
   // Note : There is probably a way to do this better
   // Consider how DW has a more general "Tranformation"
