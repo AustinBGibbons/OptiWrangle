@@ -485,6 +485,40 @@ class SparkWrangler(val tables: Array[Table], val sc: SparkContext, val inDir: S
   def delete(f: String => Boolean) = copy(tables.map(t => t.delete(f, 0 until t.table.size)))
   def delete(f: String => Boolean, columns: Any) = copy(tables.map(_.delete(f, columns)))
 
+  // source is one column, target is one or more columns
+  // fills left/right
+  def fillColumn(source: Any, target: Any) = this
+  def fillLeft(source: Any) = this
+  def fillRight(source: Any) = this
+  def fillColumn(value: String, source: Any, target: Any) = this
+  def fillLeft(value: String, source: Any) = this
+  def fillRight(value: String, source: Any) = this
+  def fillColumn(f: (String => Boolean), source: Any, target: Any) = this
+  def fillLeft(f: (String => Boolean), source: Any) = this
+  def fillRight(f: (String => Boolean), source: Any) = this
+  //fills up/down
+  def fillRow(source: Any, target: Any) = this
+  def fillUp(source: Any) = this
+  def fillDown(source: Any) = this
+  def fillRow(value: String, source: Any, target: Any) = this
+  def fillUp(value: String, source: Any) = this
+  def fillDown(value: String, source: Any) = this
+  def fillRow(f: (String => Boolean), source: Any, target: Any) = this
+  def fillUp(f: (String => Boolean), source: Any) = this
+  def fillDown(f: (String => Boolean), source: Any) = this
+
+  // Todo, I'm not too wild ablut this nomenclature. The time is 1:38 am. THat is probably why.
+  def wrapColumn(width: Int) = this
+  def wrapColumn(width: Int, columns: Any) = this
+  def wrapColumn(f: (String => Boolean)) = this
+  def wrapColumn(f: (String => Boolean), columns: Any) = this
+  def wrapRow(width: Int) = this
+  def wrapRow(width: Int, columns: Any) = this
+  def wrapRow(f: (String => Boolean)) = this
+  def wrapRow(f: (String => Boolean), columns: Any) = this
+
+  
+
   //
   // IO
   //
