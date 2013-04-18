@@ -25,3 +25,4 @@ Consider
     dw.cut(after=".", on=".", List("LATITUDE", "LONGITUDE"))
     dw("DATETIME").split(" ").rename(("DATE", "TIME"))
     dw.drop("TIME")
+    dw.writeToFile("cleaner.csv")
