@@ -75,7 +75,7 @@ class Column(val column: RDD[String], val header: String, sc: SparkContext) exte
     if(row >= column.count()) 
       error("Requesting to promote row " + row + " but there are only "+column.count()+" rows")
     val col = copy(_header = column.toArray.apply(row))
-    col.delete(row)
+    col.delete(row).apply(0)
   }
   def promote(h: String) = copy(_header = h)
 
@@ -170,7 +170,6 @@ class Column(val column: RDD[String], val header: String, sc: SparkContext) exte
     }
   }), "extract"))
 
-  def delete(f: String => Boolean) = copy(column.filter(f))
   def edit(f: String => String) = copy(column.map(f))
   
   // what should my name be
@@ -181,14 +180,15 @@ class Column(val column: RDD[String], val header: String, sc: SparkContext) exte
     Array(copy(before, "split"), copy(after, "split"))
   }
 
-  //def split(f: String => String): Array[Column]
-
-  // this is not supported in RDD
+  // Todo : deprecate for filter
+  def delete(f: String => Boolean) = Array(copy(column.filter(f)))
+  
+  // Todo : deprecate : this is not supported in RDD
   def delete(row: Int) = {
     if(row >= column.count()) 
       error("Requesting to delete row " + row + " but there are only "+column.count()+" rows")
     val arr = column.toArray
-    copy(sc.parallelize(arr.take(row) ++ arr.drop(row + 1)))
+    Array(copy(sc.parallelize(arr.take(row) ++ arr.drop(row + 1))))
   }
 
 }
@@ -240,10 +240,20 @@ class Table(val table: Array[Column], val name: String = "Table", sc: SparkConte
   }
 
   // todo - make a better name
-  def mapConditional(transform: ((String => Boolean), Column) => Column, f: String => Boolean, columns: Seq[Any]) = {
+  def mapConditional(transform: ((String => Boolean), Column) => Array[Column], f: String => Boolean, columns: Any) = {
     val indices = getColumns(columns)
-    indices.foreach(index => table(index) = transform(f, table(index)))
-    this
+    copy(table.zip(0 until table.size).flatMap{case(column, index) => {
+      if(indices.contains(index)) transform(f, column)
+      else Array(column)
+    }})
+  } 
+
+  def mapConditional(transform: (Int, Column) => Array[Column], index: Int, columns: Any) = {
+    val indices = getColumns(columns)
+    copy(table.zip(0 until table.size).flatMap{case(column, index) => {
+      if(indices.contains(index)) transform(index, column)
+      else Array(column)
+    }})
   } 
 
   def map(transform: ((String => String), Column) => Array[Column], f: String => String, columns: Any) = {
@@ -281,55 +291,29 @@ class Table(val table: Array[Column], val name: String = "Table", sc: SparkConte
   def cutRightValue(value: String, column: Column): Array[Column] = column.cutRight(value)
   def cutAllValue(value: String, column: Column): Array[Column] = column.cutAll(value)
   def cutFunction(f: String => String, column: Column): Array[Column] = column.cut(f)
-  def cut(index: Int, columns: Any): Table = {
-    map(cutIndex _, index, columns)
-  }
-  def cut(value: String, columns: Any): Table = {
-    map(cutValue _, value, columns)
-  }
-  def cutRight(value: String, columns: Any): Table = {
-    map(cutRightValue _, value, columns)
-  }
-  def cutAll(value: String, columns: Any): Table = {
-    map(cutAllValue _, value, columns)
-  }
-  def cut(f: String => String, columns: Any): Table = {
-    map(cutFunction _, f, columns)
-  }
+  def cut(index: Int, columns: Any): Table = map(cutIndex _, index, columns)
+  def cut(value: String, columns: Any): Table = map(cutValue _, value, columns)
+  def cutRight(value: String, columns: Any): Table = map(cutRightValue _, value, columns)
+  def cutAll(value: String, columns: Any): Table = map(cutAllValue _, value, columns)
+  def cut(f: String => String, columns: Any): Table = map(cutFunction _, f, columns)
 
   def splitIndex(index: Int, column: Column): Array[Column] = column.split(index)
   def splitValue(value: String, column: Column): Array[Column] = column.split(value)
   def splitRightValue(value: String, column: Column): Array[Column] = column.splitRight(value)
   def splitAllValue(value: String, column: Column): Array[Column] = column.splitAll(value)
   def splitFunction(f: String => String, column: Column): Array[Column] = column.split(f)
-  def split(index: Int, columns: Any): Table = {
-    map(splitIndex _, index, columns)
-  }
-  def split(value: String, columns: Any): Table = {
-    map(splitValue _, value, columns)
-  }
-  def splitRight(value: String, columns: Any): Table = {
-    map(splitRightValue _, value, columns)
-  }
-  def splitAll(value: String, columns: Any): Table = {
-    map(splitAllValue _, value, columns)
-  }
-  def split(f: String => String, columns: Any): Table = {
-    map(splitFunction _, f, columns)
-  }
+  def split(index: Int, columns: Any): Table = map(splitIndex _, index, columns)
+  def split(value: String, columns: Any): Table = map(splitValue _, value, columns)
+  def splitRight(value: String, columns: Any): Table = map(splitRightValue _, value, columns)
+  def splitAll(value: String, columns: Any): Table = map(splitAllValue _, value, columns)
+  def split(f: String => String, columns: Any): Table = map(splitFunction _, f, columns)
 
   def extractIndex(index: Int, column: Column): Array[Column] = column.extract(index)
   def extractValue(value: String, column: Column): Array[Column] = column.extract(value)
   def extractFunction(f: String => String, column: Column): Array[Column] = column.extract(f)
-  def extract(index: Int, columns: Any): Table = {
-    map(extractIndex _, index, columns)
-  }
-  def extract(value: String, columns: Any): Table = {
-    map(extractValue _, value, columns)
-  }
-  def extract(f: String => String, columns: Any): Table = {
-    map(extractFunction _, f, columns)
-  }
+  def extract(index: Int, columns: Any): Table = map(extractIndex _, index, columns)
+  def extract(value: String, columns: Any): Table = map(extractValue _, value, columns)
+  def extract(f: String => String, columns: Any): Table = map(extractFunction _, f, columns)
 
   def drop(index: Int) : Table = copy(table.take(index) ++ table.drop(index+1))
   def drop(value: String) : Table = copy(table.take(getHeaderIndex(value)) ++ table.drop(getHeaderIndex(value)+1))
@@ -355,6 +339,12 @@ class Table(val table: Array[Column], val name: String = "Table", sc: SparkConte
     table(indices(0)) = new Column(newCol, cols.foldLeft("")((t, col) => t + col.header), sc)
     this.drop(indices.drop(1))
   }
+
+  def deleteIndex(index: Int, column: Column) : Array[Column] = column.delete(index)
+  def deleteFunction(f: String => Boolean, column: Column) : Array[Column] = column.delete(f)
+  //def delete(index: Int) : Table = copy(table.map(_.delete(index)))
+  def delete(index: Int, columns: Any) : Table = mapConditional(deleteIndex _, index, columns)
+  def delete(f: String => Boolean, columns: Any) : Table = mapConditional(deleteFunction _, f, columns)
 
   // access column check me
   def apply(column: String) : Column = {
@@ -489,6 +479,11 @@ class SparkWrangler(val tables: Array[Table], val sc: SparkContext, val inDir: S
 
   def mergeAll(glue: String = ",") = copy(tables.map(t => t.merge((0 until t.table.size), glue)))
   def merge(columns: Seq[Any], glue: String = ",") = copy(tables.map(t => t.merge(columns, glue)))
+
+  def delete(index: Int) = copy(tables.map(t => t.delete(index, 0 until t.table.size)))
+  def delete(index: Int, columns: Any) = copy(tables.map(_.delete(index, columns)))
+  def delete(f: String => Boolean) = copy(tables.map(t => t.delete(f, 0 until t.table.size)))
+  def delete(f: String => Boolean, columns: Any) = copy(tables.map(_.delete(f, columns)))
 
   //
   // IO
