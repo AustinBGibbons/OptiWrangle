@@ -344,6 +344,18 @@ class Table(val table: Array[Column], val name: String = "Table", sc: SparkConte
   }
   */
 
+  // do I want to default this?
+  def mergeAll(glue: String = ",") = merge((0 until table.size), glue)
+  def merge(columns: Seq[Any], glue: String = ",") = {
+    if(columns.size < 2) warn("Tried to merge less than two columns: (" + columns.size + ")")
+    if(columns.size > table.size) error("Merging " + columns.size + " when table is size " + table.size)
+    val indices = getColumns(columns).toArray.sortWith(_ < _)
+    val cols = indices.map(index => table(index))
+    val newCol = cols.map(_.column).reduce((t, next) => t.zip(next).map(x => x._1 + glue + x._2))
+    table(indices(0)) = new Column(newCol, cols.foldLeft("")((t, col) => t + col.header), sc)
+    this.drop(indices.drop(1))
+  }
+
   // access column check me
   def apply(column: String) : Column = {
     table(getColumn(column).get)
@@ -474,6 +486,9 @@ class SparkWrangler(val tables: Array[Table], val sc: SparkContext, val inDir: S
   def drop(value: String) = copy(tables.map(_.drop(value)))
   // how to type this better? todo
   def drop(columns: Seq[Any]) = copy(tables.map(_.drop(columns)))
+
+  def mergeAll(glue: String = ",") = copy(tables.map(t => t.merge((0 until t.table.size), glue)))
+  def merge(columns: Seq[Any], glue: String = ",") = copy(tables.map(t => t.merge(columns, glue)))
 
   //
   // IO
