@@ -8,7 +8,6 @@ import spark.SparkContext._
 class Base {
 
   // a hacky thing I use. Should refactor to eliminate use of this
-  val FAKE_STRING = "L!G0nb**g" + (new scala.util.Random()).nextInt
   val OW_EXTENSION = "ow" 
  
   /**
@@ -46,7 +45,6 @@ class Base {
     System.err.println("\n\n\t" + msg + "\n\n")
     System.exit(-1)
   }
-
 }
 
 object Column extends Base {
@@ -71,23 +69,40 @@ class Column(val column: RDD[String], val header: String, sc: SparkContext) exte
   }
   def promote(h: String) = copy(_header = h)
 
+  // cuts just once
+  def cut(index: Int) = copy(column.map(cell => {
+    println(index + " " + cell)
+    if(index >= cell.size) cell //warn("tried to cut a index larger than the string")
+    else cell.substring(0, index) + cell.substring(index+1)
+  }))
+
+  // cuts all. If you want to cut one, use the function operator
+  def cut(value: String, all: Boolean = true) = copy(column.map(cell => {
+    if (all) cell.replaceAllLiterally(value, "")
+    else cell.replaceFirst(value, "")
+  }))
+
   def cut(f: String => String) = copy(column.map(cell => {
-      val result = f(cell)
-      val index = cell.indexOf(result)
-      cell.substring(0, index) + cell.substring(index+result.size)
-    }))
+    val result = f(cell)
+    val index = cell.indexOf(result)
+    if(index == -1) cell
+    else cell.substring(0, index) + cell.substring(index+result.size)
+  }))
+
+  def extract(f: String => String) = copy(column.map(f))
 
   def delete(f: String => Boolean) = copy(column.filter(f))
-  def extract(f: String => String) = copy(column.map(f))
+  def edit(f: String => String) = copy(column.map(f))
   
+  // what should my name be
   def split(f: String => String): Array[Column] = {
     val results = column.map(f)
     val before = column.zip(results).map{case(cell, result) => cell.substring(0, cell.indexOf(result))}
     val after = column.zip(results).map{case(cell, result) => cell.substring(cell.indexOf(result) + result.size)}
     Array(copy(before, "split"), copy(after, "split"))
   }
-  
- // def merge()
+
+  //def split(f: String => String): Array[Column]
 
   // this is not supported in RDD
   def delete(row: Int) = {
@@ -96,6 +111,7 @@ class Column(val column: RDD[String], val header: String, sc: SparkContext) exte
     val arr = column.toArray
     copy(sc.parallelize(arr.take(row) ++ arr.drop(row + 1)))
   }
+
 }
 
 object Table extends Base {
@@ -116,8 +132,14 @@ class Table(val table: Array[Column], val name: String = "Table", sc: SparkConte
   def getColumn(column: Any) = column match {
     case x: Int => if(x < 0 || x >= headers.size) error("Header index is bad: " + x) ; x
     case x: String => if(!headers.contains(x)) error("No header: " + x); headers.get(x).get
+    case _ => error("getColumn only defined on Strings (header) and Int (index)") ; -1
   }
 
+  def getColumns(columns: Any) = columns match {
+    case x: Seq[Any] => x.map(getColumn).toSet
+    case _ => Set(getColumn(columns))
+  }
+  
   // create a header
   def promote(row: Int) : Table = {
     val nt = copy(table.map(_.promote(row))) 
@@ -131,11 +153,68 @@ class Table(val table: Array[Column], val name: String = "Table", sc: SparkConte
     copy((0 until header.size).map(index => table(index).promote(header(index))).toArray ++ table.drop(table.size - header.size), _headers = header.zip(0 until header.size).toMap)
   }
 
-  def cut(f: String => String) = copy(table.map(_.cut(f)))
-  def extract(f: String => String) = copy(table.map(_.extract(f)))
-  def split(f: String => String) = copy(table.flatMap(_.split(f)))  
-  def delete(f: String => Boolean) = copy(table.map(_.delete(f)))
+  // todo - make a better name
+  def mapConditional(transform: ((String => Boolean), Column) => Column, f: String => Boolean, columns: Seq[Any]) = {
+    val indices = getColumns(columns)
+    indices.foreach(index => table(index) = transform(f, table(index)))
+    this
+  } 
+
+  def map(transform: ((String => String), Column) => Column, f: String => String, columns: Any) = {
+    val indices = getColumns(columns)
+    copy(table.zip(0 until table.size).flatMap{case(column, index) => {
+      if(indicies.contains(index)) transform(f, column)
+      else Array(column)
+    })
+  }
+
+  def map(transform: (Int, Column) => Column, index: Int, columns: Any) = {
+    val indices = getColumns(columns)
+    indices.foreach(index => table(index) = transform(index, table(index)))
+    this
+  }
+
+  def map(transform: (String, Boolean, Column) => Column, value: String, all: Boolean, columns: Any) = {
+    val indices = getColumns(columns)
+    indices.foreach(index => table(index) = transform(value, all, table(index)))
+    this
+  }
+
+  // would cut(f: Any, ...) be better? I think not but maybe
+  // cannot have both name duplication and default parameters
+  // could move the burden to the frontend
+  // could do columns: Any = (0 until table.size) but cannot overload name
+  def cutIndex(index: Int, column: Column): Column = column.cut(index)
+  def cutValue(value: String, all: Boolean, column: Column): Column = column.cut(value, all)
+  def cutFunction(f: String => String, column: Column): Column = column.cut(f)
+  def cut(index: Int, columns: Any): Table = {
+    map(cutIndex _, index, columns)
+  }
+  def cut(value: String, all: Boolean, columns: Any): Table = {
+    map(cutValue _, value, all, columns)
+  }
+  def cut(f: String => String, columns: Any): Table = {
+    map(cutFunction _, f, columns)
+  }
+
+/*
+  def extractWrapper(f: String => String, column: Column): Column = column.extract(f)
+  def extract(f: String => String, columns: Seq[Any] = (0 until table.size)): Table = {
+    map(extractWrapper, f, columns)
+  }
   
+  def deleteWrapper(f: String => Boolean, column: Column): Column = column.delete(f)
+  def delete(f: String => Boolean, columns: Seq[Any] = (0 until table.size)): Table = {
+    mapConditional(deleteWrapper, f, columns)
+  }
+
+  def editWrapper(f: String => String, column: Column): Column = column.edit(f)
+  def edit(f: String => String, columns: Seq[Any] = (0 until table.size)): Table = {
+    map(editWrapper, f, columns)
+  }
+*/
+  def split(f: String => String) = copy(table.flatMap(_.split(f)))  
+
   def drop(column: Any) {
     column match {
       case x: Seq[Any] => x.foreach(drop)
@@ -222,15 +301,25 @@ class SparkWrangler(val tables: Array[Table], val sc: SparkContext, val inDir: S
   def copy(_tables: Array[Table]= tables, _sc: SparkContext= sc, _inDir: String = inDir) =
     new SparkWrangler(_tables, _sc, _inDir)
 
-  def promote(header: Array[String]) =
-    copy(tables.map(_.promote(header))) 
-  def promote(row: Int) =
-    copy(tables.map(_.promote(row))) 
   def apply(colName: String) = tables.map(_.apply(colName)).head // todo implicit conversion etc. etc.
   def update(colName: String, newCol: Column) = tables.map{table => table.update(colName, newCol)}
   def apply(colIndex: Int) = tables.map(_.apply(colIndex)).head // todo implicit conversion etc. etc.
   def update(colIndex: Int, newCol: Column) = tables.map{table => table.update(colIndex, newCol)}
   //def update(colName: String, newCols: Array[Column]) = tables.zip(newCols).map{case(table, column) => table.update(colName, column)}
+
+  /*
+  * User facing functions
+  */
+  def promote(header: Array[String]) = copy(tables.map(_.promote(header))) 
+  def promote(row: Int) = copy(tables.map(_.promote(row))) 
+
+  def cut(index: Int) = copy(tables.map(t => t.cut(index, (0 until t.table.size))))
+  def cut(index: Int, columns: Any) = copy(tables.map(_.cut(index, columns)))
+  def cut(value: String) = copy(tables.map(t => t.cut(value, true, (0 until t.table.size))))
+  def cut(value: String, all: Boolean) = copy(tables.map(t => t.cut(value, all, (0 until t.table.size))))
+  def cut(value: String, columns: Any) = copy(tables.map(_.cut(value, true, columns)))
+  def cut(f: String => String) = copy(tables.map(t => t.cut(f, (0 until t.table.size))))
+  def cut(f: String => String, columns: Any) = copy(tables.map(_.cut(f, columns)))
 
   /*
   * IO
