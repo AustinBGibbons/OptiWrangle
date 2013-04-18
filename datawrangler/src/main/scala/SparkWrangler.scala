@@ -52,6 +52,7 @@ object Column extends Base {
   def apply(arr: Array[String], sc: SparkContext) = new Column(sc.parallelize(arr), null, sc)
 }
 
+// It has become clear to me that we should store the index of the column in the table
 class Column(val column: RDD[String], val header: String, sc: SparkContext) extends Base {
   // combine the RDD and the header and return as an array
   def collect() : Array[String] = {
@@ -324,15 +325,18 @@ class Table(val table: Array[Column], val name: String = "Table", sc: SparkConte
     map(extractFunction _, f, columns)
   }
 
-  def drop(column: Any) : Table = {
-    column match {
-      //case x: Seq[Any] => x.foreach(drop) TODO
-      case _ => {
-        val index = getColumn(column)
-        copy(table.take(index) ++ table.drop(index+1))
-      }
-    }
+  def drop(index: Int) : Table = copy(table.take(index) ++ table.drop(index+1))
+  def drop(value: String) : Table = copy(table.take(getHeaderIndex(value)) ++ table.drop(getHeaderIndex(value)+1))
+  def drop(columns: Seq[Any]) : Table = {
+    val lookup = getColumns(columns)
+    copy(table.zip(0 until table.size).filter{case(column, index) => lookup.contains(index)}.map(x => x._1).toArray)
   }
+  /* Because of type erasure. Ugh, type erasure. 
+  def drop(values: Seq[String]) : Table = {
+    val lookup = values.toSet
+    copy(table.filter{column => lookup.contains(column.header)}.toArray)
+  }
+  */
 
   // access column check me
   def apply(column: String) : Column = {
@@ -458,6 +462,11 @@ class SparkWrangler(val tables: Array[Table], val sc: SparkContext, val inDir: S
   def extract(f: String => String, columns: Any) = copy(tables.map(_.extract(f, columns)))
   //def extractAll(value: String) = copy(tables.map(t => t.extractAll(value, (0 until t.table.size))))
   //def extractAll(value: String, columns: Any) = copy(tables.map(_.extractAll(value, columns)))
+
+  def drop(index: Int) = copy(tables.map(_.drop(index)))
+  def drop(value: String) = copy(tables.map(_.drop(value)))
+  // how to type this better? todo
+  def drop(columns: Seq[Any]) = copy(tables.map(_.drop(columns)))
 
   //
   // IO
