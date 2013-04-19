@@ -8,17 +8,14 @@ object SparkTest {
     val location = 4
     val testFile = "/afs/cs.stanford.edu/u/gibbons4/data/test.data"
     var dw : SparkWrangler = SparkWrangler(testFile, "\n", ",")
-    //dw = dw.promote(Array("ID","LATITUDE","LONGITUDE","USER_ID","DATE","COMMENT"))
-    dw = dw.promote(0)
-    dw = dw.cut(0, List("LATITUDE", "LONGITUDE")) // cut the first string
-    // dw = dw.cutRight(0) // cut the last string?
-    dw = dw.cut("\"")
-    dw("LATITUDE") = dw("LATITUDE").cut("1") // by value
-    dw("LONGITUDE") = dw("LONGITUDE").cut(1) // by position
-    dw("ID") = dw("ID").cut(_.substring(1,2)) // by function
-/*
-    dw.writeToFile()
-*/
-    println(dw.toString())
+    println("\n\n\n\n\nGo\n\n\n\n\n")
+    dw.cut("\"")
+      .promote(Array("ID","LATITUDE","LONGITUDE","USER_ID","DATE","COMMENT"))
+      .cut((s => s.substring(0, s.indexOf("."))), List("LATITUDE", "LONGITUDE"))
+      .split(" ", "DATETIME")
+      //.drop(4)
+      .writeToFile()
+
+    //println(dw.toString())
   } 
 }
