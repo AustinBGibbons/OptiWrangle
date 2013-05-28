@@ -418,8 +418,8 @@ object SparkWrangler extends Base {
     }
   }  
 
-  val sc = new SparkContext("local[32]", "SparkWrangler")
-  def apply(inFile: String, rows: String="\n", cols: String=null) = {
+  def apply(inFile: String, rows: String="\n", cols: String=null, threads: String = "32") = {
+    val sc = new SparkContext("local["+threads+"]", "SparkWrangler")
     val file = parseFileName(inFile)
     new SparkWrangler(Array(Table(inFile, rows, cols, file._2, sc)), sc, file._1)
   }

@@ -9,7 +9,8 @@ object Count {
   def main(args: Array[String]) {
     val location = 4
     val testFile = args(0) //"/afs/cs.stanford.edu/u/gibbons4/data/counting8x3e6.csv"
-    var dw : SparkWrangler = SparkWrangler(testFile, "\n", ",")
+    val numThreads = args(1)
+    var dw : SparkWrangler = SparkWrangler(testFile, "\n", ",", numThreads)
     /*
     dw = dw.cut("\"")
     dw = dw.cut("1")
