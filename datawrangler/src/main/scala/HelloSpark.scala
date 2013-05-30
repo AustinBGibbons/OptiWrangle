@@ -9,6 +9,7 @@ object SparkTest {
     println(args(0))
     val testFile = args(0) //"/afs/cs.stanford.edu/u/gibbons4/data/test.data"
     var dw : SparkWrangler = SparkWrangler(testFile, "\n", ",")
+    //dw.cutAll("\"").cut("1")//.wrap(4)
     dw.cutAll("\"").cut("1")//.wrap(4)
     //dw.wrapRow(4)
 /*
@@ -17,8 +18,8 @@ object SparkTest {
       .split(" ", "DATETIME")
       .drop(4)
 */
+    
       .writeToFile()
-
     //println(dw.toString())
   } 
 }

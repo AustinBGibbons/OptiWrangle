@@ -6,10 +6,9 @@ import spark._
 import spark.SparkContext._
 
 class Base {
-
   // a hacky thing I use. Should refactor to eliminate use of this
-  val OW_EXTENSION = "ow" 
- 
+  val OW_EXTENSION = "rdd"
+
   /**
   * Helper code to deal with warnings and errors
   * I should really make this its own package TODO
@@ -48,61 +47,97 @@ class Base {
   }
 }
 
-object Column extends Base {
-  def apply(arr: Array[String], sc: SparkContext) = new Column(sc.parallelize(arr), null, sc)
-  def apply(rdd: RDD[String], sc: SparkContext) = new Column(rdd, null, sc)
+object Table extends Base {
+  def apply(inFile: String, rows: String, cols: String=null, name: String = "OptiWrangle", sc: SparkContext) = {
+    if(rows != "\n") error("SparkWrangler only supports newline separated rows")
+    val t = new Table(sc.textFile(inFile).map(s => Array(s)), 1, null, name, sc)
+    if(cols != null) t.split(cols, List(0))
+    else t
+  }
 }
 
-// It has become clear to me that we should store the index of the column in the table
-class Column(val column: RDD[String], val header: String, sc: SparkContext) extends Base {
-  // combine the RDD and the header and return as an array
-  def collect() : Array[String] = {
-    if(header != null) header +: column.collect()
-    else column.collect()
+class Table(val table: RDD[Array[String]], val width: Int, val header: Map[String, Int], val name: String, sc: SparkContext) extends Base {
+
+  private def copy(_table: RDD[Array[String]]=table, _width: Int=width, _header: Map[String, Int]=header, _name: String=name, _sc: SparkContext=sc)
+    = new Table(_table, _width, _header, _name, _sc)
+
+  def getHeaderIndex(columnName: String): Int = {
+    if(!header.contains(columnName)) header.foreach(println)
+    if(!header.contains(columnName)) error("Requested a header which doesn't exist: " + columnName)
+    header.get(columnName).get
   }
 
-  private def copy(_column: RDD[String]= column, _header: String= header, _sc: SparkContext= sc) = 
-    new Column(_column, _header, _sc)
-
-  private def unzipAndCopy(newCols: RDD[Array[String]], header: String = "New_Column"): Array[Column] = {
-    (0 until newCols.first.size).map(index => copy(newCols.map(_.apply(index)), header)).toArray
+  def getColumn(column: Any) = column match {
+    case x: Int => if(x < 0 || x >= width) error("Header index is bad: " + x) ; x
+    case x: String => getHeaderIndex(x)
+    case _ => error("getColumn only defined on Strings (header) and Int (index) " + column) ; -1
   }
 
-  private def stretch(arr: Array[String], size: Int): Array[String] = {
-    arr ++ Array.fill[String](size - arr.size)("")
+  def getColumns(columns: Any) = columns match {
+    case x: Seq[Any] => x.map(getColumn).toSet
+    case x: Array[Any] => x.map(getColumn).toSet
+    case _ => Set(getColumn(columns))
   }
 
+  def promote(newHeader: Array[String]) = copy(_header = newHeader.zip(0 until width).toMap)
   def promote(row: Int) = {
-    if(row >= column.count()) 
-      error("Requesting to promote row " + row + " but there are only "+column.count()+" rows")
-    val col = copy(_header = column.toArray.apply(row))
-    col.delete(row).apply(0)
-  }
-  def promote(h: String) = copy(_header = h)
-
-  // TODO This could be better
-  def demote(row: Int = 0) = {
-    val left = sc.parallelize(column.take(row)) // todo check row is small
-    val right = column.subtract(left)
-    copy((left ++ sc.parallelize(Array(header))) ++ right, null)
+    if(row >= table.count())
+      error("Requesting to promote row " + row + " but there are only "+table.count()+" rows")
+    val newHeader = table.toArray.apply(row).zip(0 until width).toMap
+    copy(delete(row).table, _header = newHeader)
   }
 
-  // cuts just once
-  def cut(index: Int) = Array(copy(column.map(cell => {
+  def demote(row: Int) = {
+    val newRow = header.toList.sortBy(_._2).map(_._1).toArray
+    val left = sc.parallelize(table.take(row)) // todo check row is small
+    val right = table.subtract(left)
+    copy(_table = (left ++ sc.parallelize(Array(newRow))) ++ right, _header = null)
+  }
+
+  // todo - no need to be private
+  
+  private def filter(f: String => Boolean, columns: Any): Table = {
+    val indices = getColumns(columns)
+    val _width = 0 until width
+    copy(table.filter(row => row.zip(_width).map{case(cell, index) =>
+      if(indices.contains(index)) f(cell)
+      else true
+    }.reduce(_ || _)))
+  }
+
+  private def map(f: String => String, columns: Any): Table = {
+    val indices = getColumns(columns)
+    val _width = 0 until width
+    copy(table.map(row => row.zip(_width).map{case(cell, index) => 
+      //if(indices.contains(index)) {println("gotcha: " + cell) ; f(cell)}
+      //else {println("missed : " + cell) ; cell}
+      if(indices.contains(index)) f(cell)
+      else cell
+    }))
+  }
+
+  // todo
+  private def flatMap(f: String => Array[String], columns: Any): Table = {
+    val indices = getColumns(columns)
+    val _width = 0 until width
+    copy(table.flatMap(row => row.zip(_width).map{case(cell, index) => 
+      if(indices.contains(index)) f(cell) 
+      else Array(cell)
+    }))
+    this
+  }
+
+  // CUT
+
+  def cut(index: Int, columns: Any): Table = map(cell => {
     if(index < 0) error("Trying to cut on index: " + index)
     if(index >= cell.size) cell //warn("tried to cut a index larger than the string")
     else cell.substring(0, index) + cell.substring(index+1)
-  })))
+  }, columns) 
 
-  def cut(value: String) = Array(copy(column.map(_.replaceFirst(value, ""))))
-  def cutAll(value: String) = Array(copy(column.map(_.replaceAllLiterally(value, ""))))
-  def cutRight(value: String) = Array(copy(column.map(cell => {
-    val index = cell.lastIndexOf(value)
-    if(index == -1) cell
-    else cell.substring(0, index) + cell.substring(index + value.size)
-  })))
-
-  def cut(f: String => String) = Array(copy(column.map(cell => {
+  def cut(value: String, columns: Any): Table = map(_.replaceFirst(value, ""), columns) 
+  
+  def cut(f: String => String, columns: Any): Table = map(cell => {
     try {
       val result = f(cell)
       val index = cell.indexOf(result)
@@ -111,392 +146,249 @@ class Column(val column: RDD[String], val header: String, sc: SparkContext) exte
     } catch {
       case _ => cell // perhaps not the best thing to do...
     }
-  })))
+  }, columns)
+  
+  def cutRight(value: String, columns: Any): Table = map(cell => {
+    val index = cell.lastIndexOf(value)
+    if(index == -1) cell
+    else cell.substring(0, index) + cell.substring(index + value.size)
+  }, columns)
 
-  // If no cell s.t. index < cell.size, then creates a blank column
-  def split(index: Int) = {
-    if (index < 0) error("Trying to cut on index: " + index)
-    val splitCol = column.map(cell => {
-      if(index < cell.size) Array(cell.substring(0, index), cell.substring(index+1))
-      else Array(cell, "")
-    })
-    unzipAndCopy(splitCol)
-  }
+  //def cutAll(value: String, columns: Any): Table = map(_.replaceAllLiterallyLiterally(value, ""), columns) 
+  def cutAll(value: String, columns: Any): Table = map(_.replaceAllLiterally(value, ""), columns) 
 
-  def split(value: String) = {
-    val splitCol = column.map(cell => {
-      val index = cell.indexOf(value)
-      if(index != -1) Array(cell.substring(0, index), cell.substring(index+value.size))
-      else Array(cell, "")
-    })
-    unzipAndCopy(splitCol)
-  }
+  // SPLIT
+  
+  def split(index: Int, columns: Any): Table = flatMap(cell => {
+    if (index < 0) error("Trying to split on index: " + index)
+    if(index < cell.size) Array(cell.substring(0, index), cell.substring(index+1))
+    else Array(cell, "")
+  }, columns)
 
-  def splitRight(value: String) = {
-    val splitCol = column.map(cell => {
-      val index = cell.lastIndexOf(value)
-      if(index != -1) Array(cell.substring(0, index), cell.substring(index+value.size))
-      else Array(cell, "")
-    })
-    unzipAndCopy(splitCol)
-  }
-
-  // TODO - I think split takes value as a Regex // First World Problems
-  def splitAll(value: String) = {
-    val splits = column.map(_.split(value))
-    val size = splits.map(_.size).reduce(scala.math.max)
-    val splitCol = splits.map(stretch(_, size))
-    //  stretch(cell.split(value), size)
-    //})
-    unzipAndCopy(splitCol)
-  }
-
-  def extract(index: Int) = Array(this, copy(column.map(cell => {
-    if(index < 0) error("Trying to extract on index: " + index)
-    if(index >= cell.size) ""
-    else cell(index).toString 
-  }), "extract"))
-  def extract(value: String) = Array(this, copy(column.map(cell => {
-    if(cell.indexOf(value) != -1) cell
-    else ""
-  }), "extract"))
-  def extract(f: String => String) = Array(this, copy(column.map(cell => {
+  // TODO - should this just wrap to split (_ => value)
+  def split(value: String, columns: Any): Table = flatMap(cell => {
+    val index = cell.indexOf(value)
+    if(index != -1) Array(cell.substring(0, index), cell.substring(index+value.size))
+    else Array(cell, "")
+  }, columns)
+  
+  // splitAll? look in column-major...
+  def split(f: String => String, columns: Any): Table = flatMap(cell => {
     try {
       val result = f(cell)
       val index = cell.indexOf(result)
-      if(index == -1) ""
-      else result
+      if(index == -1) Array(cell, "")
+      else Array(cell.substring(0, index), cell.substring(index+result.size))
     } catch {
-      case _ => "" // perhaps not the best thing to do...
+      case _ => Array(cell, "") // perhaps not the best thing to do...
     }
-  }), "extract"))
+  }, columns)
 
-  def edit(f: String => String) = copy(column.map(f))
+  def splitRight(value: String, columns: Any): Table = flatMap(cell => {
+    val index = cell.lastIndexOf(value)
+    if(index != -1) Array(cell.substring(0, index), cell.substring(index+value.size))
+    else Array(cell, "")
+  }, columns)
+
+  def splitAll(value: String, columns: Any): Table = flatMap(_.split(value), columns) 
   
-  // what should my name be
-  def split(f: String => String): Array[Column] = {
-    val results = column.map(f)
-    val before = column.zip(results).map{case(cell, result) => cell.substring(0, cell.indexOf(result))}
-    val after = column.zip(results).map{case(cell, result) => cell.substring(cell.indexOf(result) + result.size)}
-    Array(copy(before, "split"), copy(after, "split"))
-  }
+  // EXTRACT
 
-  // Todo : deprecate for filter
-  def delete(f: String => Boolean) = Array(copy(column.filter(f)))
-  
-  // Todo : deprecate : this is not supported in RDD
-  def delete(row: Int) = {
-    if(row >= column.count()) 
-      error("Requesting to delete row " + row + " but there are only "+column.count()+" rows")
-    val arr = column.toArray
-    Array(copy(sc.parallelize(arr.take(row) ++ arr.drop(row + 1))))
-  }
-}
+  def extract(index: Int, columns: Any): Table = flatMap(cell => {
+    if(index < 0) error("Trying to extract on index: " + index)
+    if(index >= cell.size) Array(cell, "")
+    else Array(cell, cell(index).toString)
+  }, columns)
 
-object Table extends Base {
-  // This could be better. How can spark deal with column-major?
-  // this is probably the biggest argument for moving to row-major
-  def apply(inFile: String, rows: String="\n", cols: String=null, name: String = "Table", sc: SparkContext) = {
-    lazy val table : Table = new Table(
-    //scala.io.Source.fromFile(inFile).mkString.split(rows, -1).dropRight(1).map(x => if(cols != null) x.split(cols, -1) else Array(x)).transpose.map(arr => Column(arr, sc)), name, sc)
-    Column(sc.textFile(inFile), sc).split(rows).flatMap(col => 
-      if(cols != null) col.split(cols) 
-      else Array(col)
-    ), name, sc)
-    table
-  }
-}
+  def extract(value: String, columns: Any): Table = flatMap(cell => {
+    if(cell.indexOf(value) != -1) Array(cell, value)
+    else Array(cell, "")
+  }, columns)
 
-class Table(val table: Array[Column], val name: String = "Table", sc: SparkContext) extends Base {
+  def extract(f: String => String, columns: Any): Table = flatMap(cell => {
+    try {
+      val result = f(cell)
+      val index = cell.indexOf(result)
+      if(index == -1) Array(cell, "")
+      else Array(cell, result)
+    } catch {
+      case _ => Array(cell, "")
+    }
+  }, columns)
 
-  def copy(_table : Array[Column] = table, _name: String = name, _sc: SparkContext = sc) 
-    = new Table(_table, _name, _sc)  
+  // EDIT : just wraps map atm
+  def edit(f: String => String, columns: Any)= map(f, columns)
 
-  def getHeaderIndex(name: String): Int = {
-    table.zip(0 until table.size)
-      .map{case(column, index) => if(column.header == name) 1 else 0}
-    //  .reduce()
-    0
-  }
+  // DELETE - no good in this format.
+  def delete(del: Int) : Table = 
+    copy(table.zip(sc.parallelize(0 until table.count().toInt)).filter{case(row, index) => del != index}.map{case(row, index) => row})
+  def delete(f: String => Boolean, columns: Any): Table = filter(f, columns)
 
-  def getColumn(column: Any) = column match {
-    case x: Int => if(x < 0 || x >= table.size) error("Header index is bad: " + x) ; x
-    case x: String => getHeaderIndex(x)
-    case _ => error("getColumn only defined on Strings (header) and Int (index)") ; -1
-  }
-
-  def getColumns(columns: Any) = columns match {
-    case x: Seq[Any] => x.map(getColumn).toSet
-    case _ => Set(getColumn(columns))
-  }
-  
-  // create a header
-  def promote(row: Int) = copy(table.map(_.promote(row))) 
-  def demote(row: Int = 0) = copy(table.map(_.demote(row)))
-  
-  def promote(newHeader: Array[String]) : Table = {
-    if(newHeader.size != table.size) 
-      warn("Specified less headers ("+newHeader.size+") than columns ("+table.size+")")
-    val header = if(newHeader.size > table.size) newHeader.take(table.size) else newHeader
-    copy((0 until header.size).map(index => 
-      table(index).promote(header(index))).toArray ++ table.drop(table.size - header.size)
-    )
-  }
-
-  // todo - make a better name
-  def mapConditional(transform: ((String => Boolean), Column) => Array[Column], f: String => Boolean, columns: Any) = {
-    val indices = getColumns(columns)
-    copy(table.zip(0 until table.size).flatMap{case(column, index) => {
-      if(indices.contains(index)) transform(f, column)
-      else Array(column)
-    }})
-  } 
-
-  def mapConditional(transform: (Int, Column) => Array[Column], index: Int, columns: Any) = {
-    val indices = getColumns(columns)
-    copy(table.zip(0 until table.size).flatMap{case(column, index) => {
-      if(indices.contains(index)) transform(index, column)
-      else Array(column)
-    }})
-  } 
-
-  def map(transform: ((String => String), Column) => Array[Column], f: String => String, columns: Any) = {
-    val indices = getColumns(columns)
-    copy(table.zip(0 until table.size).flatMap{case(column, index) => {
-      if(indices.contains(index)) transform(f, column)
-      else Array(column)
-    }})
-  }
-
-  def map(transform: (Int, Column) => Array[Column], index: Int, columns: Any) = {
-    val indices = getColumns(columns)
-    copy(table.zip(0 until table.size).flatMap{case(column, index) => {
-      if(indices.contains(index)) transform(index, column)
-      else Array(column)
-    }})
-    //this
-  }
-
-  def map(transform: (String, Column) => Array[Column], value: String, columns: Any) = {
-    val indices = getColumns(columns)
-    copy(table.zip(0 until table.size).flatMap{case(column, index) => {
-      if(indices.contains(index)) transform(value, column)
-      else Array(column)
-    }})
-    //this
-  }
-
-  // would cut(f: Any, ...) be better? I think not but maybe
-  // cannot have both name duplication and default parameters
-  // could move the burden to the frontend
-  // could do columns: Any = (0 until table.size) but cannot overload name
-  def cutIndex(index: Int, column: Column): Array[Column] = column.cut(index)
-  def cutValue(value: String, column: Column): Array[Column] = column.cut(value)
-  def cutRightValue(value: String, column: Column): Array[Column] = column.cutRight(value)
-  def cutAllValue(value: String, column: Column): Array[Column] = column.cutAll(value)
-  def cutFunction(f: String => String, column: Column): Array[Column] = column.cut(f)
-  def cut(index: Int, columns: Any): Table = map(cutIndex _, index, columns)
-  def cut(value: String, columns: Any): Table = map(cutValue _, value, columns)
-  def cutRight(value: String, columns: Any): Table = map(cutRightValue _, value, columns)
-  def cutAll(value: String, columns: Any): Table = map(cutAllValue _, value, columns)
-  def cut(f: String => String, columns: Any): Table = map(cutFunction _, f, columns)
-
-  def splitIndex(index: Int, column: Column): Array[Column] = column.split(index)
-  def splitValue(value: String, column: Column): Array[Column] = column.split(value)
-  def splitRightValue(value: String, column: Column): Array[Column] = column.splitRight(value)
-  def splitAllValue(value: String, column: Column): Array[Column] = column.splitAll(value)
-  def splitFunction(f: String => String, column: Column): Array[Column] = column.split(f)
-  def split(index: Int, columns: Any): Table = map(splitIndex _, index, columns)
-  def split(value: String, columns: Any): Table = map(splitValue _, value, columns)
-  def splitRight(value: String, columns: Any): Table = map(splitRightValue _, value, columns)
-  def splitAll(value: String, columns: Any): Table = map(splitAllValue _, value, columns)
-  def split(f: String => String, columns: Any): Table = map(splitFunction _, f, columns)
-
-  def extractIndex(index: Int, column: Column): Array[Column] = column.extract(index)
-  def extractValue(value: String, column: Column): Array[Column] = column.extract(value)
-  def extractFunction(f: String => String, column: Column): Array[Column] = column.extract(f)
-  def extract(index: Int, columns: Any): Table = map(extractIndex _, index, columns)
-  def extract(value: String, columns: Any): Table = map(extractValue _, value, columns)
-  def extract(f: String => String, columns: Any): Table = map(extractFunction _, f, columns)
-
-  def drop(index: Int) : Table = copy(table.take(index) ++ table.drop(index+1))
-  def drop(value: String) : Table = copy(table.take(getHeaderIndex(value)) ++ table.drop(getHeaderIndex(value)+1))
+  // DROP
+  def drop(index: Int) : Table = copy(table.map(row => row.take(index) ++ row.drop(index+1))) 
+  def drop(value: String) : Table = drop(getHeaderIndex(value))
   def drop(columns: Seq[Any]) : Table = {
-    val lookup = getColumns(columns)
-    copy(table.zip(0 until table.size).filter{case(column, index) => lookup.contains(index)}.map(x => x._1).toArray)
+    val indices = getColumns(columns)
+    copy(table.map(row => dropSeveral(row, indices)), _header = dropSeveral(header, indices))
   }
-  /* Because of type erasure. Ugh, type erasure. 
-  def drop(values: Seq[String]) : Table = {
-    val lookup = values.toSet
-    copy(table.filter{column => lookup.contains(column.header)}.toArray)
+  def dropSeveral(row: Array[String], indices : Set[Int]) = {
+    row.zip(0 until row.size).filter{case (cell, index) => ! indices.contains(index)}.map(_._1)
   }
-  */
+  def dropSeveral(row: Map[String, Int], indices : Set[Int]) = {
+    row.filter{case (cell, index) => ! indices.contains(index)}
+  }
 
-  // do I want to default this?
-  def mergeAll(glue: String = ",") = merge((0 until table.size), glue)
+  // MERGE
   def merge(columns: Seq[Any], glue: String = ",") = {
     if(columns.size < 2) warn("Tried to merge less than two columns: (" + columns.size + ")")
-    if(columns.size > table.size) error("Merging " + columns.size + " when table is size " + table.size)
+    if(columns.size > width) error("Merging " + columns.size + " when table is size " + width)
     val indices = getColumns(columns).toArray.sortWith(_ < _)
-    val cols = indices.map(index => table(index))
-    val newCol = cols.map(_.column).reduce((t, next) => t.zip(next).map(x => x._1 + glue + x._2))
-    table(indices(0)) = new Column(newCol, cols.foldLeft("")((t, col) => t + col.header), sc)
-    this.drop(indices.drop(1))
+    val first = indices.head
+    val concatHeader = header.filter(c => indices.contains(c._2)).toList.sortBy(_._2).map(_._1).reduce(_+_)
+    val newHeader = Map((concatHeader, first)) ++ header.filter(c => !(indices.contains(c._2))).toMap
+    val newTable = table.map(row => {
+      row(first) = row.foldLeft("")((t, col) => t+col)
+      row.zip(0 until width).filter{case(col, index) => indices.contains(index) && index != first}.map(_._1)
+    })
+    copy(newTable, width - (indices.size - 1), newHeader)
   }
 
-  def deleteIndex(index: Int, column: Column) : Array[Column] = column.delete(index)
-  def deleteFunction(f: String => Boolean, column: Column) : Array[Column] = column.delete(f)
-  //def delete(index: Int) : Table = copy(table.map(_.delete(index)))
-  def delete(index: Int, columns: Any) : Table = mapConditional(deleteIndex _, index, columns)
-  def delete(f: String => Boolean, columns: Any) : Table = mapConditional(deleteFunction _, f, columns)
+  // todo - rowmajor columnmajor hybrid
+  def transpose = this //copy(sc.parallelize(table.collect().transpose.toArray), _header = null)
 
-  // access column check me
-  /*
-  def apply(column: String) : Column = {
-    table(getColumn(column).get)
+  // translate - add columns or rows - kinda bad naming
+  // val b = blank?
+  def blank(distance: Int) = Array.fill[String](distance)("")
+  def translateLeft(distance: Int) = {
+    val b = blank(distance)
+    copy(table.map(row => b ++ row), _width = width+distance) // todo fix header
   }
-  
-  def update(column: String, newColumn: Column) = {
-    table(getColumn(column).get) = newColumn
+  def translateRight(distance: Int) = {
+    val b = blank(distance)
+    copy(table.map(row => row ++ b), _width=width+distance) // todo fix header
   }
-
-  def update(column: String, newColumns: Array[Column]) = {
-    table(getColumn(column).get) = newColumn
+  def translateUp(distance: Int) = {
+    val b = blank(width)
+    copy(table.union(sc.parallelize(Array.fill[Array[String]](distance)(b))))
   }
-
-  def apply(column: Int) : Column = {
-    if(column > table.size) error("Requested column "+column+" but there are only "+table.size+" columns")
-    table(column)
+  def translateDown(distance: Int) = {
+    val b = blank(width)
+    copy(sc.parallelize(Array.fill[Array[String]](distance)(b)).union(table))
   }
 
-  def update(column: Int, newColumn: Column) = {
-    if(column > table.size) error("Requested column "+column+" but there are only "+table.size+" columns")
-    table(column) = newColumn
+  // fold
+  // wrap
+  def wrapShort(wrap: Int) = copy(table.map{col => col.grouped(wrap).toArray}.map(x=>x.transpose).flatMap(x => x)) // width
+  def wrapLong(wrap: Int) = {
+    val grouper = sc.parallelize(for (i <- 0 until table.count().toInt) yield i / wrap).coalesce(table.partitions.size)
+    
+    copy(table.coalesce(grouper.partitions.size).zip(grouper).groupBy(_._2).map(_._2.map(_._1).reduce(_ ++ _)), _width = wrap)
+  }  
+  def wrap(wrap: Int) = {
+    if(wrap < width) wrapShort(wrap)
+    else wrapLong(wrap)
   }
-*/
-  // currently => throw away header. Is this the thing to do? todo. haha.
-  // todo - column and row formats? other solution?
-  def transpose() = copy(table.map(col => col.collect()).toArray.transpose.map(t => Column(sc.parallelize(t), sc)))
 
-  /*
-  * IO
-  */
-  // similar column-major / transpose problems
-  override def toString() : String = {
-    if (table == null) "Arrrr matey this table be null!"
-    else {
-      //table.transpose.map(row => row.collect().mkString(",")).mkString("\n")
-      // TODO add header
-      table.map(col => col.collect().toArray).transpose.map(row => row.mkString(",")).mkString("\n")
-    }
+  // fill
+
+  // partition 
+  def partition(f: String => String, columns: Any): Array[Table] = {
+    val parts = getColumns(columns).toList
+    if(parts.size > 1) goodbye(" Multi-partition not yet supported ")
+    val index = parts(0)
+    //val keys = table.map(row => f(row(index))).distinct()
+    // could be better, could be better ...
+    table.groupBy(row => f(row(index))).collect().map(p => copy(sc.parallelize(p._2), _name = p._1))
+  }
+
+  // todo seperators, merge function, etc.
+  override def toString(): String = {
+    val h = if(header != null) header.map(_._1) + "\n" else ""
+    h + table.toArray.map(x => x.mkString(",")).mkString("\n")
   }
 }
 
-// companion object for factory constructors
 object SparkWrangler extends Base {
-
   // normal case: replace myFile.csv with myFile.ow
   def parseFileName(fileName : String) = {
     // TODO - get directory file belongs to
     val dirName = if(fileName.contains("/")) {
-      fileName.substring(0, fileName.lastIndexOf("/") + 1) 
-    } else { "./" } 
+      fileName.substring(0, fileName.lastIndexOf("/") + 1)
+    } else { "./" }
     val shortName = if(fileName.contains("/")) {
-      fileName.substring(fileName.lastIndexOf("/")+1) 
+      fileName.substring(fileName.lastIndexOf("/")+1)
     } else {
       fileName
     }
     if (shortName.size == 0) { error("Directories not currently supported") }
     if(shortName.contains(".")) {
-      val extension = shortName.substring(shortName.lastIndexOf(".")+1) 
-      val newExtension = 
-        if (extension == OW_EXTENSION) OW_EXTENSION+"."+OW_EXTENSION 
+      val extension = shortName.substring(shortName.lastIndexOf(".")+1)
+      val newExtension =
+        if (extension == OW_EXTENSION) OW_EXTENSION+"."+OW_EXTENSION
         else OW_EXTENSION
       (dirName, shortName.substring(0, shortName.lastIndexOf(".")) + "." + newExtension)
     } else {
       (dirName, shortName + "." + OW_EXTENSION)
     }
-  }  
+  }
 
-  def apply(inFile: String, rows: String="\n", cols: String=null, threads: String = "32") = {
-    val sc = new SparkContext("local["+threads+"]", "SparkWrangler")
+  def apply(inFile: String, rows: String="\n", cols: String=null, numThreads: String="32") = {
     val file = parseFileName(inFile)
+    val sc = new SparkContext("local["+numThreads+"]", "SparkWrangler")
     new SparkWrangler(Array(Table(inFile, rows, cols, file._2, sc)), sc, file._1)
   }
 }
 
 class SparkWrangler(val tables: Array[Table], val sc: SparkContext, val inDir: String = "./") extends Base {
 
-  /** Return a copy with certain elements replaced */
   private def copy(_tables: Array[Table]= tables, _sc: SparkContext= sc, _inDir: String = inDir) =
     new SparkWrangler(_tables, _sc, _inDir)
-/*
-  def apply(colName: String) = Array(tables.map(_.apply(colName)).head) // todo implicit conversion etc. etc.
-  def apply(colIndex: Int) = Array(tables.map(_.apply(colIndex)).head) // todo implicit conversion etc. etc.
-  def update(colName: String, newCol: Column) = tables.map{table => table.update(colName, newCol)}
-  def update(colName: String, newCols: Array[Column]) = tables.map{table => table.update(colName, newCol)}
-  def update(colIndex: Int, newCol: Column) = tables.map{table => table.update(colIndex, newCol)}
-  def update(colIndex: Int, newCols: Array[Column]) = tables.map{table => table.update(colIndex, newCol)}
-  def update(colName: String, newCols: Array[Column]) = tables.zip(newCols).map{case(table, column) => table.update(colName, column)}
-*/
-  // TODO check size
 
-  /*
-  * User facing functions
-  */
-  def promote(header: Array[String]) = copy(tables.map(_.promote(header))) 
-  def promote(row: Int) = copy(tables.map(_.promote(row))) 
-  def demote(row: Int = 0) = copy(tables.map(_.demote(row))) 
+  def promote(header: Array[String]) = copy(tables.map(_.promote(header)))
+  def promote(row: Int) = copy(tables.map(_.promote(row)))
+  def demote(row: Int = 0) = copy(tables.map(_.demote(row)))
 
-  // Note : There is probably a way to do this better
-  // Consider how DW has a more general "Tranformation"
-  // Should we look more like that?
-  // We want to avoid the user having to specify many fields
-
-  def cut(index: Int) = copy(tables.map(t => t.cut(index, (0 until t.table.size))))
+  def cut(index: Int) = copy(tables.map(t => t.cut(index, (0 until t.width))))
   def cut(index: Int, columns: Any) = copy(tables.map(_.cut(index, columns)))
-  def cut(value: String) = copy(tables.map(t => t.cut(value, (0 until t.table.size))))
+  def cut(value: String) = copy(tables.map(t => t.cut(value, (0 until t.width))))
   def cut(value: String, columns: Any) = copy(tables.map(_.cut(value, columns)))
-  def cut(f: String => String) = copy(tables.map(t => t.cut(f, (0 until t.table.size))))
+  def cut(f: String => String) = copy(tables.map(t => t.cut(f, (0 until t.width))))
   def cut(f: String => String, columns: Any) = copy(tables.map(_.cut(f, columns)))
-  def cutAll(value: String) = copy(tables.map(t => t.cutAll(value, (0 until t.table.size))))
+  def cutAll(value: String) = copy(tables.map(t => t.cutAll(value, (0 until t.width))))
   def cutAll(value: String, columns: Any) = copy(tables.map(_.cutAll(value, columns)))
-  def cutRight(value: String) = copy(tables.map(t => t.cutRight(value, (0 until t.table.size))))
+  def cutRight(value: String) = copy(tables.map(t => t.cutRight(value, (0 until t.width))))
   def cutRight(value: String, columns: Any) = copy(tables.map(_.cutRight(value, columns)))
-  //def cutRight(f: String => String) = copy(tables.map(t => t.cutRight(f, (0 until t.table.size))))
+  //def cutRight(f: String => String) = copy(tables.map(t => t.cutRight(f, (0 until t.width))))
   //def cutRight(f: String => String, columns: Any) = copy(tables.map(_.cutRight(f, columns)))
 
-  def split(index: Int) = copy(tables.map(t => t.split(index, (0 until t.table.size))))
+  def split(index: Int) = copy(tables.map(t => t.split(index, (0 until t.width))))
   def split(index: Int, columns: Any) = copy(tables.map(_.split(index, columns)))
-  def split(value: String) = copy(tables.map(t => t.split(value, (0 until t.table.size))))
+  def split(value: String) = copy(tables.map(t => t.split(value, (0 until t.width))))
   def split(value: String, columns: Any) = copy(tables.map(_.split(value, columns)))
-  def split(f: String => String) = copy(tables.map(t => t.split(f, (0 until t.table.size))))
+  def split(f: String => String) = copy(tables.map(t => t.split(f, (0 until t.width))))
   def split(f: String => String, columns: Any) = copy(tables.map(_.split(f, columns)))
-  def splitAll(value: String) = copy(tables.map(t => t.splitAll(value, (0 until t.table.size))))
+  def splitAll(value: String) = copy(tables.map(t => t.splitAll(value, (0 until t.width))))
   def splitAll(value: String, columns: Any) = copy(tables.map(_.splitAll(value, columns)))
-  def splitRight(value: String) = copy(tables.map(t => t.splitRight(value, (0 until t.table.size))))
+  def splitRight(value: String) = copy(tables.map(t => t.splitRight(value, (0 until t.width))))
   def splitRight(value: String, columns: Any) = copy(tables.map(_.splitRight(value, columns)))
-  
-  def extract(index: Int) = copy(tables.map(t => t.extract(index, (0 until t.table.size))))
+
+  def extract(index: Int) = copy(tables.map(t => t.extract(index, (0 until t.width))))
   def extract(index: Int, columns: Any) = copy(tables.map(_.extract(index, columns)))
-  def extract(value: String) = copy(tables.map(t => t.extract(value, (0 until t.table.size))))
+  def extract(value: String) = copy(tables.map(t => t.extract(value, (0 until t.width))))
   def extract(value: String, columns: Any) = copy(tables.map(_.extract(value, columns)))
-  def extract(f: String => String) = copy(tables.map(t => t.extract(f, (0 until t.table.size))))
+  def extract(f: String => String) = copy(tables.map(t => t.extract(f, (0 until t.width))))
   def extract(f: String => String, columns: Any) = copy(tables.map(_.extract(f, columns)))
-  //def extractAll(value: String) = copy(tables.map(t => t.extractAll(value, (0 until t.table.size))))
-  //def extractAll(value: String, columns: Any) = copy(tables.map(_.extractAll(value, columns)))
 
   def drop(index: Int) = copy(tables.map(_.drop(index)))
   def drop(value: String) = copy(tables.map(_.drop(value)))
   // how to type this better? todo
   def drop(columns: Seq[Any]) = copy(tables.map(_.drop(columns)))
 
-  def mergeAll(glue: String = ",") = copy(tables.map(t => t.merge((0 until t.table.size), glue)))
+  def mergeAll(glue: String = ",") = copy(tables.map(t => t.merge((0 until t.width), glue)))
   def merge(columns: Seq[Any], glue: String = ",") = copy(tables.map(t => t.merge(columns, glue)))
 
-  def delete(index: Int) = copy(tables.map(t => t.delete(index, 0 until t.table.size)))
-  def delete(index: Int, columns: Any) = copy(tables.map(_.delete(index, columns)))
-  def delete(f: String => Boolean) = copy(tables.map(t => t.delete(f, 0 until t.table.size)))
+  def delete(index: Int) = copy(tables.map(t => t.delete(index)))
+  def delete(f: String => Boolean) = copy(tables.map(t => t.delete(f, 0 until t.width)))
   def delete(f: String => Boolean, columns: Any) = copy(tables.map(_.delete(f, columns)))
 
   // source is one column, target is one or more columns
@@ -522,14 +414,16 @@ class SparkWrangler(val tables: Array[Table], val sc: SparkContext, val inDir: S
   def fillDown(f: (String => Boolean), source: Any) = this
 
   // Todo, I'm not too wild ablut this nomenclature. The time is 1:38 am. THat is probably why.
+  /*
   def wrapColumn(width: Int) = this
   def wrapColumn(width: Int, columns: Any) = this
   def wrapColumn(f: (String => Boolean)) = this
   def wrapColumn(f: (String => Boolean), columns: Any) = this
-  def wrapRow(width: Int) = this
-  def wrapRow(width: Int, columns: Any) = this
-  def wrapRow(f: (String => Boolean)) = this
-  def wrapRow(f: (String => Boolean), columns: Any) = this
+  */
+  def wrap(width: Int) = copy(tables.map(_.wrap(width)))
+  //def wrapRow(width: Int, columns: Any) = this
+  //def wrapRow(f: (String => Boolean)) = this
+  //def wrapRow(f: (String => Boolean), columns: Any) = this
 
   def transpose() = copy(tables.map(_.transpose))
 
@@ -539,30 +433,23 @@ class SparkWrangler(val tables: Array[Table], val sc: SparkContext, val inDir: S
   def fold(f: (String => Boolean)) = this // perhaps not worth offering all columns explicitly. What does that even mean?
   def fold(f: (String => Boolean), columns: Any) = this
 
-  // def unfold  
+  // def unfold
   def unfold(column: Any, measure: Any) = this
 
-  @deprecated(message="Translate not supported in OptiWrangle. Email austinbgibbons@gmail", since="0.0")
-  def translateLeft(distance: Int) = this
-  @deprecated(message="Translate not supported in OptiWrangle. Email austinbgibbons@gmail", since="0.0")
-  def translateRight(distance: Int) = this
-  @deprecated(message="Translate not supported in OptiWrangle. Email austinbgibbons@gmail", since="0.0")
-  def translateUp(distance: Int) = this
-  @deprecated(message="Translate not supported in OptiWrangle. Email austinbgibbons@gmail", since="0.0")
-  def translateDown(distance: Int) = this
+  def translateLeft(distance: Int) = copy(tables.map(_.translateLeft(distance)))
+  def translateRight(distance: Int) = copy(tables.map(_.translateRight(distance)))
+  def translateUp(distance: Int) = copy(tables.map(_.translateUp(distance)))
+  def translateDown(distance: Int) = copy(tables.map(_.translateDown(distance)))
 
   // todo - what other types of partitioning? Every n rows, by columns, etc.
-  def partition(f: (String => String)) = this
-  def partition(f: (String => String), columns: Any) = this
-
-  //
-  // IO
-  //
+  //def partition(f: (String => String)) = partition(f, 0 until tables.size)
+  def partition(f: (String => String), columns: Any = List(0)) = copy(tables.flatMap(_.partition(f, columns)))
 
   // Todo - change to check File or Directory as a courtesy
   def writeToFile(outDir: String = inDir) : Unit = {
     tables.map(table => {
-      val of = new java.io.PrintStream(new java.io.FileOutputStream(inDir + table.name))
+      val name = if(table.name.size < 1) "table" + scala.util.Random.nextInt(10000) else table.name
+      val of = new java.io.PrintStream(new java.io.FileOutputStream(inDir + name))
       of.println(table)
       of.close()
     })
