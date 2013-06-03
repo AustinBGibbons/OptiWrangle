@@ -106,7 +106,7 @@ class Table(val table: RDD[Array[String]], val width: Int, val header: Map[Strin
   }
 
   private def map(f: String => String, columns: Any): Table = {
-    val indices = getColumns(columns)
+    val indices = getColumns(columns).toArray
     val _width = 0 until width
     copy(table.map(row => row.zip(_width).map{case(cell, index) => 
       //if(indices.contains(index)) {println("gotcha: " + cell) ; f(cell)}
@@ -281,10 +281,11 @@ class Table(val table: RDD[Array[String]], val width: Int, val header: Map[Strin
   def wrapShort(wrap: Int) = copy(table.map{col => col.grouped(wrap).toArray}.map(x=>x.transpose).flatMap(x => x)) // width
   def wrapLong(wrap: Int) = {
     val grouper = sc.parallelize(for (i <- 0 until table.count().toInt) yield i / wrap).coalesce(table.partitions.size)
-    
+    println(table.coalesce(grouper.partitions.size).zip(grouper).groupBy(_._2).map(_._2.map(_._1).reduce(_ ++ _)))
     copy(table.coalesce(grouper.partitions.size).zip(grouper).groupBy(_._2).map(_._2.map(_._1).reduce(_ ++ _)), _width = wrap)
   }  
   def wrap(wrap: Int) = {
+    println("wrapping: " + wrap)
     if(wrap < width) wrapShort(wrap)
     else wrapLong(wrap)
   }
@@ -301,11 +302,20 @@ class Table(val table: RDD[Array[String]], val width: Int, val header: Map[Strin
     table.groupBy(row => f(row(index))).collect().map(p => copy(sc.parallelize(p._2), _name = p._1))
   }
 
+  // join two tables together
+  def merge (o: Table) = {
+    //val _header = if(checkHeader(header, o.header)) header else 
+    // val _name = ...
+    copy(table ++ o.table)
+  }
+
   // todo seperators, merge function, etc.
   override def toString(): String = {
     val h = if(header != null) header.map(_._1) + "\n" else ""
     h + table.toArray.map(x => x.mkString(",")).mkString("\n")
   }
+
+  def force {println("\nForced: " + table.count())}
 }
 
 object SparkWrangler extends Base {
@@ -445,6 +455,13 @@ class SparkWrangler(val tables: Array[Table], val sc: SparkContext, val inDir: S
   //def partition(f: (String => String)) = partition(f, 0 until tables.size)
   def partition(f: (String => String), columns: Any = List(0)) = copy(tables.flatMap(_.partition(f, columns)))
 
+  // todo - name
+  def merge(a: Table, b: Table): Table = a.merge(b)
+  def merge(): SparkWrangler = merge(0 until tables.size)
+  def merge(merge_tables: Seq[Int]): SparkWrangler =
+    copy(Array(tables.drop(1).foldLeft[Table](tables(0))(merge)))
+  
+
   // Todo - change to check File or Directory as a courtesy
   def writeToFile(outDir: String = inDir) : Unit = {
     tables.map(table => {
@@ -459,4 +476,6 @@ class SparkWrangler(val tables: Array[Table], val sc: SparkContext, val inDir: S
     val sep = "\n\t========== Begin Table ==========\t\n\n"
     sep + tables.map(table => table.toString()).mkString(sep)
   }
+
+  def force {tables.foreach(_.force)}
 }

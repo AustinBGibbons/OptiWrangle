@@ -20,11 +20,14 @@ object Gene {
     }
 
     // Do it all at once :
-    val header = Array("def", "seq", "line3", "line4")
-    dw.wrap(4).promote(header)
+    val header = Array("def", "seq", "line3", "line4")  
+    val now = System.currentTimeMillis()
+    val p = dw.wrap(4).promote(header)
       .partition(_.substring(location, location+4), "seq")
       .delete(clip, "seq")
       .cut(_.substring(0, 13), "seq")
-      .writeToFile()
+    println("\n\n\t Time : " + ((System.currentTimeMillis() - now) / 1e3.toDouble))      
+
+    p.writeToFile()
   } 
 }
