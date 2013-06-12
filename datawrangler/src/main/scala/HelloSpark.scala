@@ -8,18 +8,18 @@ object SparkTest {
     val location = 4
     println(args(0))
     val testFile = args(0) //"/afs/cs.stanford.edu/u/gibbons4/data/test.data"
-    var dw : SparkWrangler = SparkWrangler(testFile, "\n", ",")
+    var dw : SparkWrangler = SparkWrangler(testFile, "\n", ",", args(1))
     //dw.cutAll("\"").cut("1")//.wrap(4)
     var now = System.currentTimeMillis()
-    val p = dw/*.cutAll("\"")*/.cut("1") //.wrap(4)
+    val p = dw.cut("1") //.wrap(4)
     p.force
     println("\n\n\t Time : " + ((System.currentTimeMillis() - now) / 1e3.toDouble) + "\n\n")
     now = System.currentTimeMillis()
-    val p1 = p.cut("2") 
+    val p1 = p.cut("2").cut("3") 
     p1.force
     println("\n\n\t Time : " + ((System.currentTimeMillis() - now) / 1e3.toDouble) + "\n\n")
     now = System.currentTimeMillis()
-    val p2 = p1.cut("2") 
+    val p2 = p1.cut("4") 
     p2.force
     println("\n\n\t Time : " + ((System.currentTimeMillis() - now) / 1e3.toDouble) + "\n\n")
     //dw.wrapRow(4)

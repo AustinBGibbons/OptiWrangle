@@ -5,7 +5,16 @@ import scala.util.matching.Regex
 import spark._
 import spark.SparkContext._
 
-class Base {
+object Helper extends Serializable {
+  def stretch(arr: Array[String], size: Int) = {
+    arr ++ Array.fill[String](size - arr.length)("")
+  }
+  def pairwiseMax(x: Array[Int], y: Array[Int]) = {
+    x.zip(y).map{case(x,y) => scala.math.max(x,y)}//.toArray
+  }
+}
+
+class Base extends Serializable{
   // a hacky thing I use. Should refactor to eliminate use of this
   val OW_EXTENSION = "rdd"
 
@@ -51,7 +60,7 @@ object Table extends Base {
   def apply(inFile: String, rows: String, cols: String=null, name: String = "OptiWrangle", sc: SparkContext) = {
     if(rows != "\n") error("SparkWrangler only supports newline separated rows")
     val t = new Table(sc.textFile(inFile).map(s => Array(s)), 1, null, name, sc)
-    if(cols != null) t.split(cols, List(0))
+    if(cols != null) t.splitAll(cols, List(0))
     else t
   }
 }
@@ -116,18 +125,27 @@ class Table(val table: RDD[Array[String]], val width: Int, val header: Map[Strin
     }))
   }
 
-  // todo
   private def flatMap(f: String => Array[String], columns: Any): Table = {
     val indices = getColumns(columns)
     val _width = 0 until width
-    copy(table.flatMap(row => row.zip(_width).map{case(cell, index) => 
-      if(indices.contains(index)) f(cell) 
-      else Array(cell)
-    }))
-    this
+    println("width: " + width)
+    val new_sizes = table.map(row => row.zip(_width).map{case(cell, index)  => 
+      if(indices.contains(index)) f(cell).size
+      else 1
+    }).reduce(Helper.pairwiseMax)
+    println("size: " + new_sizes)
+    copy(table.map(row => row.zip(_width).flatMap{case(cell, index) => 
+      if(indices.contains(index)) Helper.stretch(f(cell), new_sizes(index))
+      else Helper.stretch(Array(cell), new_sizes(index))
+    }), new_sizes.reduce(_+_))
   }
 
   // CUT
+  // patial support ...
+  def cutBefore(index: Int, columns: Any) = map(cell => {
+    if (index >= cell.size) cell
+    else cell.substring(index)
+  }, columns)
 
   def cut(index: Int, columns: Any): Table = map(cell => {
     if(index < 0) error("Trying to cut on index: " + index)
@@ -312,7 +330,7 @@ class Table(val table: RDD[Array[String]], val width: Int, val header: Map[Strin
   // todo seperators, merge function, etc.
   override def toString(): String = {
     val h = if(header != null) header.map(_._1) + "\n" else ""
-    h + table.toArray.map(x => x.mkString(",")).mkString("\n")
+    h + table.coalesce(1).toArray.map(x => x.mkString(",")).mkString("\n")
   }
 
   def force {println("\nForced: " + table.count())}
@@ -344,7 +362,12 @@ object SparkWrangler extends Base {
 
   def apply(inFile: String, rows: String="\n", cols: String=null, numThreads: String="32") = {
     val file = parseFileName(inFile)
-    val sc = new SparkContext("local["+numThreads+"]", "SparkWrangler")
+    val sc: SparkContext = new SparkContext("local["+numThreads+"]", "SparkWrangler")
+    new SparkWrangler(Array(Table(inFile, rows, cols, file._2, sc)), sc, file._1)
+  }
+
+  def apply(inFile: String, rows: String, cols: String, sc: SparkContext) = {
+    val file = parseFileName(inFile)
     new SparkWrangler(Array(Table(inFile, rows, cols, file._2, sc)), sc, file._1)
   }
 }
@@ -358,6 +381,9 @@ class SparkWrangler(val tables: Array[Table], val sc: SparkContext, val inDir: S
   def promote(row: Int) = copy(tables.map(_.promote(row)))
   def demote(row: Int = 0) = copy(tables.map(_.demote(row)))
 
+  def cutBefore(index: Int) = copy(tables.map(t => t.cutBefore(index, (0 until t.width))))
+  def cutBefore(index: Int, columns: Any) = copy(tables.map(_.cutBefore(index, columns)))
+  
   def cut(index: Int) = copy(tables.map(t => t.cut(index, (0 until t.width))))
   def cut(index: Int, columns: Any) = copy(tables.map(_.cut(index, columns)))
   def cut(value: String) = copy(tables.map(t => t.cut(value, (0 until t.width))))
@@ -477,5 +503,5 @@ class SparkWrangler(val tables: Array[Table], val sc: SparkContext, val inDir: S
     sep + tables.map(table => table.toString()).mkString(sep)
   }
 
-  def force {tables.foreach(_.force)}
+  def force = {tables.foreach(_.force) ; this}
 }
