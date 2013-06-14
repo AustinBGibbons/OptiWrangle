@@ -17,7 +17,7 @@ object Gene {
     // or can be made into a FASTQ dsl with clipper operation and familiar params
     def clip(in: String) = {
       if(in.size < gsize) false
-      in.toList.zip(g).map{case(g,m) => (g == m) || (g == 'N')}.reduce(_ || _)
+      in.toList.zip(g).map{case(g,m) => (g == m) || (g == 'N')}.reduce(_ && _)
     }
 
     // Do it all at once :
