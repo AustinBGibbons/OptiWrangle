@@ -107,21 +107,29 @@ class Table(val table: RDD[Array[String]], val width: Int, val header: Map[Strin
   
   private def filter(f: String => Boolean, columns: Any): Table = {
     val indices = getColumns(columns)
-    val _width = 0 until width
-    copy(table.filter(row => row.zip(_width).map{case(cell, index) =>
-      if(indices.contains(index)) f(cell)
-      else true
-    }.reduce(_ || _)))
+    val _width = width
+ //   val _width = 0 until width
+    copy(table.filter(row => {
+      var flag = true
+      var index = 0
+      while(flag && index < _width) {
+        if(indices.contains(index))
+          flag = !f(row(index))
+        index +=1
+      }
+      flag
+    }))
   }
 
   private def map(f: String => String, columns: Any): Table = {
     val indices = getColumns(columns).toArray
     val _width = 0 until width
-    copy(table.map(row => row.zip(_width).map{case(cell, index) => 
-      //if(indices.contains(index)) {println("gotcha: " + cell) ; f(cell)}
-      //else {println("missed : " + cell) ; cell}
-      if(indices.contains(index)) f(cell)
-      else cell
+    copy(table.map(row => {
+      row.zip(_width).foreach{case(cell, index) => 
+        if(indices.contains(index)) row(index) = f(cell)
+        //else cell
+      }
+      row
     }))
   }
 
@@ -450,12 +458,10 @@ class SparkWrangler(val tables: Array[Table], val sc: SparkContext, val inDir: S
   def fillDown(f: (String => Boolean), source: Any) = this
 
   // Todo, I'm not too wild ablut this nomenclature. The time is 1:38 am. THat is probably why.
-  /*
   def wrapColumn(width: Int) = this
   def wrapColumn(width: Int, columns: Any) = this
   def wrapColumn(f: (String => Boolean)) = this
   def wrapColumn(f: (String => Boolean), columns: Any) = this
-  */
   def wrap(width: Int) = copy(tables.map(_.wrap(width)))
   //def wrapRow(width: Int, columns: Any) = this
   //def wrapRow(f: (String => Boolean)) = this
